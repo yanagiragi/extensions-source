@@ -3,103 +3,62 @@ package eu.kanade.tachiyomi.extension.zh.externaldownloads
 import android.util.Log
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.FilterList
+import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SManga.Companion.COMPLETED
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
-import eu.kanade.tachiyomi.util.asJsoup
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
+import org.json.JSONArray
+import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import kotlin.math.min
 
 class ExternalDownloads : ParsedHttpSource() {
-    override val baseUrl: String
-        get() = "http://127.0.0.1:3005"
-    override val lang: String
-        get() = "zh"
-    override val name: String
-        get() = "External Downloads"
-    override val supportsLatest: Boolean
-        get() = false
+    // region Info
+    override val name: String = "External Downloads"
+    override val baseUrl: String = "http://127.0.0.1:3005"
+    override val lang: String = "zh"
+    override val supportsLatest: Boolean = false
+    // endregion
 
-    private val comicHomepage = "$baseUrl/json"
+    // region Popular
+    override fun popularMangaRequest(page: Int) = GET("$baseUrl/json")
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val requestUrl = response.request.url.toString()
-        val document = response.asJsoup()
-        val chapterList =
-            document.select("h3:containsOwn(相關集數列表) ~ div.comic-rows-videos-div")
-                .map { element ->
-                    SChapter.create().apply {
-                        val comicUrl = element.select("a").attr("href")
-                        setUrlWithoutDomain("$comicUrl/1")
-                        val title = element.select("div.comic-rows-videos-title").text()
-                        if (requestUrl == comicUrl) {
-                            name = "當前：$title"
-                        } else {
-                            name = "關聯：$title"
-                        }
-                    }
-                }
-        if (chapterList.isEmpty()) {
-            return listOf(
-                SChapter.create().apply {
-                    setUrlWithoutDomain("$requestUrl/1")
-                    name = "單章節"
+    override fun popularMangaParse(response: Response): MangasPage {
+        val jsonArray = JSONArray(response.body.string())
+        val mangas = mutableListOf<SManga>()
+        val len = min(jsonArray.length(), 10)
+        for (i in 0 until len) {
+            val obj = jsonArray.getJSONObject(i)
+            val thumb = obj.getString("thumb")
+            val thumbUri = if (thumb.startsWith("http")) thumb else "$baseUrl/assets/$thumb"
+            Log.d("EXTERNAL_DOWNLOADS", "popularMangaParse: $thumbUri")
+            mangas.add(
+                SManga.create().apply {
+                    setUrlWithoutDomain("/details/${obj.getString("title")}")
+                    title = obj.getString("title")
+                    thumbnail_url = thumbUri
+                    artist = obj.getString("artist")
+                    status = COMPLETED
                 },
             )
         }
-
-        Log.d("EXTERNAL_DOWNLOADS", "chapterListParse: $chapterList")
-        return chapterList
+        return MangasPage(mangas, hasNextPage = false)
     }
 
-    override fun mangaDetailsParse(document: Document): SManga {
-        Log.d("EXTERNAL_DOWNLOADS", "mangaDetailsParse")
-        val brief = document.select("h3.title.comics-metadata-top-row").first()?.parent()
-        return SManga.create().apply {
-            brief?.select(".title.comics-metadata-top-row")?.first()?.text()?.let { title = it }
-            thumbnail_url =
-                brief?.parent()?.select("div.col-md-4 img")?.attr("data-srcset")?.extraSrc()
-            author = selectInfo("作者：", brief) ?: selectInfo("社團：", brief)
-            genre = selectInfo("分類：", brief)
-        }
-    }
+    override fun popularMangaSelector(): String = throw UnsupportedOperationException("Not used.")
+    override fun popularMangaFromElement(element: Element): SManga = throw UnsupportedOperationException("Not used.")
+    override fun popularMangaNextPageSelector() = throw UnsupportedOperationException("Not used.")
+    // endregion
 
-    private fun selectInfo(key: String, brief: Element?): String? {
-        return brief?.select(":containsOwn($key)")?.select("div.no-select")?.text()
-    }
-
-    override fun pageListParse(document: Document): List<Page> {
-        Log.d("EXTERNAL_DOWNLOADS", "pageListParse")
-        val currentImage = document.select("img#current-page-image")
-        val dataExtension = currentImage.attr("data-extension")
-        val dataPrefix = currentImage.attr("data-prefix")
-        val pageSize = document.select(".comic-show-content-nav").attr("data-pages").toInt()
-        return List(pageSize) { index ->
-            Page(index, imageUrl = "$dataPrefix${index + 1}.$dataExtension")
-        }
-    }
-
-    //region Popular (WIP)
-    override fun popularMangaFromElement(element: Element) = comicDivToManga(element)
-
-    override fun popularMangaNextPageSelector() = null
-
-    override fun popularMangaRequest(page: Int) = GET(comicHomepage)
-
-    override fun popularMangaSelector() = "h3:containsOwn(發燒漫畫) ~ div.comic-rows-videos-div"
-    //endregion
-
-    //region Search (WIP)
-    override fun searchMangaFromElement(element: Element) = comicDivToManga(element)
-
-    override fun searchMangaNextPageSelector() = "ul.pagination a[rel=next]"
-
+    // region Search (WIP)
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val searchUrl = comicHomepage.toHttpUrl().newBuilder()
+        val searchUrl = "$baseUrl/search".toHttpUrl().newBuilder()
             .addPathSegment("search")
             .addQueryParameter("query", query)
             .addQueryParameter("page", "$page")
@@ -107,39 +66,67 @@ class ExternalDownloads : ParsedHttpSource() {
         return GET(searchUrl.build())
     }
 
-    override fun searchMangaSelector() = "div#comics-search-tag-top-row + div div.comic-rows-videos-div"
-
-    //endregion
-
-    private fun comicDivToManga(element: Element) = SManga.create().apply {
-        setUrlWithoutDomain(element.select("a").attr("href"))
-        title = element.select("div.comic-rows-videos-title").text()
-        thumbnail_url = element.select("img").attr("data-srcset").extraSrc()
+    override fun searchMangaFromElement(element: Element): SManga {
+        return SManga.create().apply {
+            setUrlWithoutDomain(element.select("a").attr("href"))
+            title = element.select("div.comic-rows-videos-title").text()
+            thumbnail_url = element.select("img").attr("data-srcset")
+        }
     }
 
-    private fun String.extraSrc(): String {
-        return split(",").first()
+    override fun searchMangaSelector() = throw UnsupportedOperationException("Not used.")
+    override fun searchMangaNextPageSelector() = throw UnsupportedOperationException("Not used.")
+    // endregion
+
+    // region Details & Chapters
+    override fun mangaDetailsParse(document: Document): SManga {
+        val obj = JSONObject(document.body().text())
+        return SManga.create().apply {
+            title = obj.getString("title")
+            val thumb = obj.getString("thumb")
+            thumbnail_url = if (thumb.startsWith("http")) thumb else "$baseUrl/assets/$thumb"
+            artist = obj.optString("artist")
+            status = COMPLETED
+        }
     }
 
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val jsonObject = JSONObject(response.body.string())
+        Log.d("EXTERNAL_DOWNLOADS", "chapterListParse: /assets/${jsonObject.getString("localPath")}")
+        return listOf(
+            SChapter.create().apply {
+                setUrlWithoutDomain("/details/${jsonObject.getString("title")}")
+                name = "Single"
+            },
+        )
+    }
+
+    override fun pageListParse(document: Document): List<Page> {
+        Log.d("EXTERNAL_DOWNLOADS", "pageListParse: ${document.body().text()}")
+        val obj = JSONObject(document.body().text())
+        val pageSize = obj.getInt("filecount")
+        return List(pageSize) { index ->
+            Log.d("EXTERNAL_DOWNLOADS", "pageListParse: $baseUrl/images/${obj.getString("title")}/${index + 1}")
+            Page(index, imageUrl = "$baseUrl/images/${obj.getString("title")}/${index + 1}")
+        }
+    }
+    // endregion
+
+    // region Filters
     override fun getFilterList(): FilterList {
         return FilterList(
             AuthorFilter(),
         )
     }
+    // endregion
 
-    //region Unsupported
+    // region Not Used
     override fun chapterFromElement(element: Element) = throw UnsupportedOperationException()
-
     override fun chapterListSelector() = throw UnsupportedOperationException()
-
     override fun imageUrlParse(document: Document) = throw UnsupportedOperationException()
-
     override fun latestUpdatesFromElement(element: Element): SManga = throw UnsupportedOperationException()
-
     override fun latestUpdatesNextPageSelector(): String? = null
-
     override fun latestUpdatesSelector(): String = throw UnsupportedOperationException()
-
-    override fun latestUpdatesRequest(page: Int): Request  = throw UnsupportedOperationException()
-    //endregion
+    override fun latestUpdatesRequest(page: Int): Request = throw UnsupportedOperationException()
+    // endregion
 }
