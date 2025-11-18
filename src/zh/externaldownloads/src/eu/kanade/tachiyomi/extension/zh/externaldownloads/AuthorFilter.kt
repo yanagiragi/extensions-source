@@ -12,11 +12,7 @@ abstract class SelectFilter(
     val selected get() = options[state].second.takeUnless { it.isEmpty() }
 }
 
-private val sortPairs = listOf(
-    "1" to "",
-    "2：本日" to "popular-today",
-    "3：本週" to "popular-week",
-    "4：所有" to "popular",
+class AuthorFilter(options: List<String>) : SelectFilter(
+    "Author",
+    options.map { it to it },
 )
-
-class AuthorFilter : SelectFilter("Author", sortPairs)
