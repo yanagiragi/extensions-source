@@ -103,7 +103,7 @@ class ExternalDownloads : ParsedHttpSource(), ConfigurableSource {
             mangas.add(
                 SManga.create().apply {
                     setUrlWithoutDomain(url.replace(baseUrl, ""))
-                    title = obj.getString("title")
+                    title = if (obj.has("title_jpn") && obj.getString("title_jpn") != "") obj.getString("title_jpn") else obj.getString("title")
                     thumbnail_url = thumbUri
                     artist = obj.getString("artist")
                     status = COMPLETED
@@ -117,9 +117,10 @@ class ExternalDownloads : ParsedHttpSource(), ConfigurableSource {
     override fun mangaDetailsParse(document: Document): SManga {
         val obj = JSONObject(document.body().text())
         return SManga.create().apply {
-            title = obj.getString("title")
+            title = if (obj.has("title_jpn") && obj.getString("title_jpn") != "") obj.getString("title_jpn") else obj.getString("title")
             val thumb = obj.getString("thumb")
-            thumbnail_url = if (thumb.startsWith("http")) thumb else "$baseUrl/assets/$thumb"
+            val absThumbUrl = baseUrl.toHttpUrl().newBuilder().addPathSegment("assets").addPathSegment(thumb).build().toString()
+            thumbnail_url = if (thumb.startsWith("http")) thumb else absThumbUrl
             artist = obj.optString("artist")
             status = COMPLETED
         }
@@ -145,11 +146,12 @@ class ExternalDownloads : ParsedHttpSource(), ConfigurableSource {
         Log.d("EXTERNAL_DOWNLOADS", "pageListParse: ${document.body().text()}")
         val obj = JSONObject(document.body().text())
         val pageSize = obj.getInt("filecount")
+        val title = if (obj.has("title_jpn") && obj.getString("title_jpn") != "") obj.getString("title_jpn") else obj.getString("title")
         return List(pageSize) { index ->
-            Log.d("EXTERNAL_DOWNLOADS", "pageListParse: $baseUrl/images/${obj.getString("title")}/${index + 1}")
+            Log.d("EXTERNAL_DOWNLOADS", "pageListParse: $baseUrl/images/$title/${index + 1}")
             val url = baseUrl.toHttpUrl().newBuilder()
                 .addPathSegment("images")
-                .addPathSegment(obj.getString("title"))
+                .addPathSegment(title)
                 .addPathSegment("${index + 1}")
                 .build()
                 .toString()
