@@ -19,13 +19,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import kotlin.math.min
 
 class ExternalDownloads : ParsedHttpSource(), ConfigurableSource {
     // region Info
     override val name: String = "External Downloads"
     override val lang: String = "zh"
     override val supportsLatest: Boolean = false
+    val pageCount = 20
     // endregion
 
     // region Preferences
@@ -48,29 +48,11 @@ class ExternalDownloads : ParsedHttpSource(), ConfigurableSource {
     }
     // endregion
 
-    // region Popular (WIP)
-    override fun popularMangaRequest(page: Int) = GET("$baseUrl/json")
+    // region Popular
+    override fun popularMangaRequest(page: Int) = GET("$baseUrl/json/$pageCount/$page")
 
     override fun popularMangaParse(response: Response): MangasPage {
-        val jsonArray = JSONArray(response.body.string())
-        val mangas = mutableListOf<SManga>()
-        val len = min(jsonArray.length(), 10) // TODO: Add pagination
-        for (i in 0 until len) {
-            val obj = jsonArray.getJSONObject(i)
-            val thumb = obj.getString("thumb")
-            val thumbUri = if (thumb.startsWith("http")) thumb else "$baseUrl/assets/$thumb"
-            Log.d("EXTERNAL_DOWNLOADS", "popularMangaParse: $thumbUri")
-            mangas.add(
-                SManga.create().apply {
-                    setUrlWithoutDomain("/details/${obj.getString("title")}")
-                    title = obj.getString("title")
-                    thumbnail_url = thumbUri
-                    artist = obj.getString("artist")
-                    status = COMPLETED
-                },
-            )
-        }
-        return MangasPage(mangas, hasNextPage = false)
+        return parseJsonToMangaPage(response)
     }
 
     override fun popularMangaSelector(): String = throw UnsupportedOperationException("Not used.")
@@ -78,27 +60,58 @@ class ExternalDownloads : ParsedHttpSource(), ConfigurableSource {
     override fun popularMangaNextPageSelector() = throw UnsupportedOperationException("Not used.")
     // endregion
 
-    // region Search (WIP)
+    // region Search
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val searchUrl = "$baseUrl/search".toHttpUrl().newBuilder()
+        val searchUrl = baseUrl.toHttpUrl().newBuilder()
             .addPathSegment("search")
             .addQueryParameter("query", query)
             .addQueryParameter("page", "$page")
+            .addQueryParameter("count", "$pageCount")
+        val selectedFilter = filters.filterIsInstance<ArtistFilter>().firstOrNull()?.selected
+        if (selectedFilter != "None") {
+            searchUrl.addQueryParameter("artists", selectedFilter)
+        }
         Log.d("EXTERNAL_DOWNLOADS", "searchMangaRequest: $searchUrl")
         return GET(searchUrl.build())
     }
 
-    override fun searchMangaFromElement(element: Element): SManga {
-        return SManga.create().apply {
-            setUrlWithoutDomain(element.select("a").attr("href"))
-            title = element.select("div.comic-rows-videos-title").text()
-            thumbnail_url = element.select("img").attr("data-srcset")
-        }
+    override fun searchMangaParse(response: Response): MangasPage {
+        return parseJsonToMangaPage(response)
     }
 
+    override fun searchMangaFromElement(element: Element) = throw UnsupportedOperationException("Not used.")
     override fun searchMangaSelector() = throw UnsupportedOperationException("Not used.")
     override fun searchMangaNextPageSelector() = throw UnsupportedOperationException("Not used.")
     // endregion
+
+    fun parseJsonToMangaPage(response: Response): MangasPage {
+        val obj = JSONObject(response.body.string())
+        val reachEnd = obj.getBoolean("reachEnd")
+        val jsonArray = obj.getJSONArray("result")
+        val mangas = mutableListOf<SManga>()
+        val len = jsonArray.length()
+        for (i in 0 until len) {
+            val obj = jsonArray.getJSONObject(i)
+            val thumb = obj.getString("thumb")
+            val thumbUri = if (thumb.startsWith("http")) thumb else "$baseUrl/assets/$thumb"
+            Log.d("EXTERNAL_DOWNLOADS", "thumbUri: $thumbUri")
+            val url = baseUrl.toHttpUrl().newBuilder()
+                .addPathSegment("details")
+                .addEncodedPathSegment(obj.getString("title"))
+                .build()
+                .toString()
+            mangas.add(
+                SManga.create().apply {
+                    setUrlWithoutDomain(url.replace(baseUrl, ""))
+                    title = obj.getString("title")
+                    thumbnail_url = thumbUri
+                    artist = obj.getString("artist")
+                    status = COMPLETED
+                },
+            )
+        }
+        return MangasPage(mangas, hasNextPage = !reachEnd)
+    }
 
     // region Details & Chapters
     override fun mangaDetailsParse(document: Document): SManga {
@@ -117,7 +130,12 @@ class ExternalDownloads : ParsedHttpSource(), ConfigurableSource {
         Log.d("EXTERNAL_DOWNLOADS", "chapterListParse: /assets/${jsonObject.getString("localPath")}")
         return listOf(
             SChapter.create().apply {
-                setUrlWithoutDomain("/details/${jsonObject.getString("title")}")
+                val url = baseUrl.toHttpUrl().newBuilder()
+                    .addPathSegment("details")
+                    .addPathSegment(jsonObject.getString("title"))
+                    .build()
+                    .toString()
+                setUrlWithoutDomain(url.replace(baseUrl, ""))
                 name = "Single"
             },
         )
@@ -129,7 +147,13 @@ class ExternalDownloads : ParsedHttpSource(), ConfigurableSource {
         val pageSize = obj.getInt("filecount")
         return List(pageSize) { index ->
             Log.d("EXTERNAL_DOWNLOADS", "pageListParse: $baseUrl/images/${obj.getString("title")}/${index + 1}")
-            Page(index, imageUrl = "$baseUrl/images/${obj.getString("title")}/${index + 1}")
+            val url = baseUrl.toHttpUrl().newBuilder()
+                .addPathSegment("images")
+                .addPathSegment(obj.getString("title"))
+                .addPathSegment("${index + 1}")
+                .build()
+                .toString()
+            Page(index, imageUrl = url)
         }
     }
     // endregion
@@ -137,7 +161,7 @@ class ExternalDownloads : ParsedHttpSource(), ConfigurableSource {
     // region Filters
     override fun getFilterList(): FilterList {
         val artists = JSONArray(preferences.artists)
-        return FilterList(AuthorFilter(List(artists.length()) { i -> artists.getString(i) }))
+        return FilterList(ArtistFilter(List(artists.length()) { i -> artists.getString(i) }))
     }
     // endregion
 

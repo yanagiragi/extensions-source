@@ -12,7 +12,7 @@ abstract class SelectFilter(
     val selected get() = options[state].second.takeUnless { it.isEmpty() }
 }
 
-class AuthorFilter(options: List<String>) : SelectFilter(
+class ArtistFilter(options: List<String>) : SelectFilter(
     "Author",
-    options.map { it to it },
+    listOf("None" to "None") + options.map { it to it },
 )
