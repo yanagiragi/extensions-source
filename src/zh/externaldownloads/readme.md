@@ -1,3 +1,3 @@
-# Self host Mangas
+# Plugin to read self host manga
 
-use it with [Ehviewer-metadata-host](https://github.com/yanagiragi/Ehviewer-metadata-host).
+use it with [ehviewer-metadata-host](https://github.com/yanagiragi/ehviewer-metadata-host).
